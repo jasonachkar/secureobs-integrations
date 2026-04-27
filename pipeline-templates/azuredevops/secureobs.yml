@@ -1,0 +1,76 @@
+parameters:
+- name: projectId
+  type: string
+- name: tenantId
+  type: string
+- name: imageTag
+  type: string
+  default: 'v1'
+- name: failOnBlocking
+  type: boolean
+  default: true
+
+stages:
+- stage: SecureObs_Scan
+  displayName: 'SecureObs Security Scan'
+  jobs:
+
+  - job: Scan
+    displayName: 'Run Semgrep + GitLeaks'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - checkout: self
+    - script: |
+        docker run --rm \
+          -v "$(Build.SourcesDirectory):/workspace" \
+          -e SECUREOBS_API_KEY="$(SECUREOBS_API_KEY)" \
+          secureobs/scanner:${{ parameters.imageTag }} \
+          scan \
+          --project-id "${{ parameters.projectId }}" \
+          --tenant-id "${{ parameters.tenantId }}" \
+          --pipeline-run-id "$(Build.BuildId)"
+      displayName: 'Scan workspace'
+
+  - job: Gate
+    displayName: 'Build gate'
+    dependsOn: Scan
+    condition: and(succeeded(), eq('${{ parameters.failOnBlocking }}', 'true'))
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - script: |
+        docker run --rm \
+          -e SECUREOBS_API_KEY="$(SECUREOBS_API_KEY)" \
+          secureobs/scanner:${{ parameters.imageTag }} \
+          gate \
+          --project-id "${{ parameters.projectId }}" \
+          --tenant-id "${{ parameters.tenantId }}" \
+          --pipeline-run-id "$(Build.BuildId)"
+      displayName: 'Check for blocking findings'
+
+  - job: PrComment
+    displayName: 'Post PR comment'
+    dependsOn: Scan
+    condition: and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))
+    continueOnError: true
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - script: |
+        docker run --rm \
+          -e SECUREOBS_API_KEY="$(SECUREOBS_API_KEY)" \
+          -e SYSTEM_ACCESSTOKEN="$(System.AccessToken)" \
+          -e SYSTEM_PULLREQUEST_PULLREQUESTID="$(System.PullRequest.PullRequestId)" \
+          -e BUILD_REPOSITORY_ID="$(Build.Repository.ID)" \
+          -e SYSTEM_TEAMPROJECT="$(System.TeamProject)" \
+          -e SYSTEM_TEAMFOUNDATIONCOLLECTIONURI="$(System.TeamFoundationCollectionUri)" \
+          secureobs/scanner:${{ parameters.imageTag }} \
+          pr-comment \
+          --project-id "${{ parameters.projectId }}" \
+          --tenant-id "${{ parameters.tenantId }}" \
+          --pipeline-run-id "$(Build.BuildId)" \
+          --platform azuredevops
+      displayName: 'Post PR comment'
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
