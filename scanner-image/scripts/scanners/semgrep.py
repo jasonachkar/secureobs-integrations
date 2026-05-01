@@ -48,7 +48,7 @@ def run(source_dir: str, project_id: str, pipeline_run_id: str) -> ScanResult:
             "path": r.get("path", ""),
             "startLine": r.get("start", {}).get("line", 0),
             "endLine": r.get("end", {}).get("line", 0),
-            "severity": extra.get("severity", ""),
+            "severity": r.get("severity") or extra.get("severity") or "INFO",
             "message": extra.get("message", ""),
             # try extra.cwe first (older semgrep), fall back to extra.metadata.cwe
             "cwe": extra.get("cwe") or metadata.get("cwe", []),

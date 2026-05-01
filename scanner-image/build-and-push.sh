@@ -8,19 +8,25 @@ IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
 IMAGE="secureobs/scanner"
 
-echo "Building $IMAGE:$VERSION"
-docker build -t "$IMAGE:$VERSION" "$SCRIPT_DIR"
+echo "Building $IMAGE:$VERSION for linux/amd64..."
 
-echo "Tagging..."
-docker tag "$IMAGE:$VERSION" "$IMAGE:v${MAJOR}.${MINOR}.${PATCH}"
-docker tag "$IMAGE:$VERSION" "$IMAGE:v${MAJOR}.${MINOR}"
-docker tag "$IMAGE:$VERSION" "$IMAGE:v${MAJOR}"
-docker tag "$IMAGE:$VERSION" "$IMAGE:latest"
+# Ensure buildx builder exists
+if ! docker buildx inspect secureobs-builder >/dev/null 2>&1; then
+    echo "Creating buildx builder..."
+    docker buildx create --name secureobs-builder --use
+    docker buildx inspect --bootstrap
+else
+    docker buildx use secureobs-builder
+fi
 
-echo "Pushing..."
-docker push "$IMAGE:v${MAJOR}.${MINOR}.${PATCH}"
-docker push "$IMAGE:v${MAJOR}.${MINOR}"
-docker push "$IMAGE:v${MAJOR}"
-docker push "$IMAGE:latest"
+# Build and push multi-platform image with all tags
+docker buildx build \
+    --platform linux/amd64 \
+    --tag "$IMAGE:v${MAJOR}.${MINOR}.${PATCH}" \
+    --tag "$IMAGE:v${MAJOR}.${MINOR}" \
+    --tag "$IMAGE:v${MAJOR}" \
+    --tag "$IMAGE:latest" \
+    --push \
+    "$SCRIPT_DIR"
 
 echo "Done. Published $IMAGE at v${MAJOR}.${MINOR}.${PATCH}, v${MAJOR}.${MINOR}, v${MAJOR}, latest."
