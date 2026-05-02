@@ -65,6 +65,28 @@ def run(
             sev = (v.get("Severity") or "LOW").upper()
             pkg = v.get("PkgName") or ""
             installed = v.get("InstalledVersion") or ""
+            # Trivy's `Results[].Target` for Java/Maven is often `pom.xml` for *every*
+            # dependency finding — misleading for dashboard "file location". Prefer
+            # package-level attribution when we're under a pom/gradle lock target.
+            pkg_path_raw = (
+                v.get("PkgPath")
+                or v.get("FilePath")
+                or ""
+            )
+            installed_files = v.get("InstalledFiles")
+            if not pkg_path_raw and isinstance(installed_files, list) and installed_files:
+                pkg_path_raw = str(installed_files[0])
+
+            if pkg_path_raw:
+                display_path = str(pkg_path_raw)
+            elif pkg and installed:
+                tgt = target or "lockfile"
+                display_path = f"{pkg}@{installed} ({tgt})"
+            elif pkg:
+                display_path = f"{pkg} ({target})"
+            else:
+                display_path = target or "/"
+
             title = v.get("Title") or vid
             desc = "\n".join(
                 filter(
@@ -77,13 +99,13 @@ def run(
                 )
             )
 
-            fingerprint = _fp("trivy", "vuln", vid, target, pkg, installed)
+            fingerprint = _fp("trivy", "vuln", vid, display_path, pkg, installed)
 
             findings.append(
                 {
                     "scanner": "trivy",
                     "ruleId": vid,
-                    "filePath": target,
+                    "filePath": display_path,
                     "codeSnippet": None,
                     "severity": sev,
                     "description": desc,
