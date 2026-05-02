@@ -1,20 +1,17 @@
 """Driver registry for the scanner orchestrator.
 
-Adding a new scanner is a two-step change:
+Adding a new scanner:
 
-1. Implement a runner module under ``scanners/`` that exposes
-   ``run(workspace, project_id, pipeline_run_id, config) -> ScanResult``.
-2. Register it here with its catalog ``key`` and the bulk-add endpoint that
-   accepts its findings payload.
+1. Implement ``run(workspace, project_id, pipeline_run_id, config)`` in
+   ``scanners/<module>.py`` returning ``ScanResult`` with payloads shaped for
+   ``POST /api/findings/bulk-universal`` (camelCase JSON — see backend
+   ``UniversalFindingDto``) **or**, for legacy Semgrep/GitLeaks, the dedicated
+   bulk endpoints shown below.
 
-Catalog keys MUST match the ``Key`` column of the backend ``Scanners`` table
-exactly — the orchestrator looks up drivers by the keys returned from
-``GET /api/projects/{id}/scanners/active``. Catalog rows whose driver isn't
-implemented in this image yet are mapped to a stub that logs a warning and
-skips, so newer catalog rows pushed by SecureObs ops never break older pinned
-image tags. Conversely, unknown keys (e.g. an old image hitting a brand-new
-catalog row before its driver has been deployed) are also skipped with a
-warning rather than aborting the whole scan.
+2. Register the catalog ``key``, ``bulk_endpoint``, and runner here.
+
+``bulk-universal`` is the ingestion path for Trivy, Bandit, Checkov, … — one
+consistent DTO regardless of tooling. Keys must match backend ``Scanner.Key``.
 """
 
 from __future__ import annotations
@@ -23,102 +20,84 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from . import gitleaks, semgrep
+from . import bandit, checkov, eslint_security, gitleaks, osv_scanner, semgrep, trivy
 from .base import ScanResult
 
 log = logging.getLogger(__name__)
 
-# Signature of every driver runner. ``config`` is whatever the user stored in
-# ``ProjectScanner.Config`` for this scanner (e.g. a SonarQube URL). It's
-# typed permissively because the API may legitimately return ``None`` when no
-# config is set.
 DriverRunner = Callable[[str, str, str, "dict[str, str] | None"], ScanResult]
+
+_BULK_UNIVERSAL = "findings/bulk-universal"
 
 
 @dataclass(frozen=True)
 class Driver:
-    """A single registered scanner driver.
-
-    Attributes:
-        key: Catalog key — must match the backend ``Scanner.Key`` exactly.
-        bulk_endpoint: Path (relative to ``SECUREOBS_API_URL``) to POST findings to.
-        runner: Callable that executes the scanner against ``/workspace``.
-    """
-
     key: str
     bulk_endpoint: str
     runner: DriverRunner
 
 
-def _semgrep_runner(
-    workspace: str,
-    project_id: str,
-    pipeline_run_id: str,
-    config: "dict[str, str] | None",
-) -> ScanResult:
-    return semgrep.run(workspace, project_id, pipeline_run_id, config)
+def _semgrep_runner(w: str, p: str, r: str, c: dict | None) -> ScanResult:
+    return semgrep.run(w, p, r, c)
 
 
-def _gitleaks_runner(
-    workspace: str,
-    project_id: str,
-    pipeline_run_id: str,
-    config: "dict[str, str] | None",
-) -> ScanResult:
-    return gitleaks.run(workspace, project_id, pipeline_run_id, config)
+def _gitleaks_runner(w: str, p: str, r: str, c: dict | None) -> ScanResult:
+    return gitleaks.run(w, p, r, c)
 
 
-def _make_stub(key: str) -> DriverRunner:
-    """Driver placeholder for catalog rows whose driver isn't bundled yet.
+def _trivy_runner(w: str, p: str, r: str, c: dict | None) -> ScanResult:
+    return trivy.run(w, p, r, c)
 
-    Returning a skipped ``ScanResult`` (instead of raising) means a user who
-    enables a not-yet-implemented scanner just gets a clear log line and the
-    rest of their scan still runs — strictly better than blowing up the whole
-    pipeline.
-    """
+
+def _bandit_runner(w: str, p: str, r: str, c: dict | None) -> ScanResult:
+    return bandit.run(w, p, r, c)
+
+
+def _checkov_runner(w: str, p: str, r: str, c: dict | None) -> ScanResult:
+    return checkov.run(w, p, r, c)
+
+
+def _osv_runner(w: str, p: str, r: str, c: dict | None) -> ScanResult:
+    return osv_scanner.run(w, p, r, c)
+
+
+def _eslint_runner(w: str, p: str, r: str, c: dict | None) -> ScanResult:
+    return eslint_security.run(w, p, r, c)
+
+
+def _external_toolchain_stub(key: str) -> DriverRunner:
+    """Sonar / Snyk / CodeQL / ZAP need hosted auth or vendor-specific CI steps."""
 
     def _run(
         workspace: str,
         project_id: str,
         pipeline_run_id: str,
-        config: "dict[str, str] | None",
+        config: dict | None,
     ) -> ScanResult:
-        log.warning(
-            "Scanner '%s' is in the catalog but its driver isn't bundled in "
-            "this image yet — skipping. Pin to a newer image tag once the "
-            "driver ships.",
+        del workspace, project_id, pipeline_run_id, config
+        log.info(
+            "Skipping '%s' — not bundled in this image; wire it through your "
+            "vendor's CI (token, SARIF, or AST analysis) instead of expecting "
+            "the generic orchestrator bundle to run it.",
             key,
         )
-        return ScanResult(skipped=True, skip_reason="driver_not_implemented")
+        return ScanResult(skipped=True, skip_reason="external_toolchain")
 
     return _run
-
-
-# The bulk endpoint for stubs is intentionally the same shape as a real one;
-# the orchestrator never calls it because stubs always return skipped=True.
-_STUB_ENDPOINT = "findings/bulk-noop"
 
 
 REGISTRY: dict[str, Driver] = {
     "semgrep": Driver("semgrep", "findings/bulk-semgrep", _semgrep_runner),
     "gitleaks": Driver("gitleaks", "findings/bulk-gitleaks", _gitleaks_runner),
-    # Catalog parity stubs — rows seeded in SecureObsDbContext that don't yet
-    # have a driver bundled in this image. They no-op safely so users can
-    # enable them in the dashboard without breaking their pipeline.
-    "trivy": Driver("trivy", _STUB_ENDPOINT, _make_stub("trivy")),
-    "bandit": Driver("bandit", _STUB_ENDPOINT, _make_stub("bandit")),
-    "eslint-security": Driver(
-        "eslint-security", _STUB_ENDPOINT, _make_stub("eslint-security")
-    ),
-    "osv-scanner": Driver("osv-scanner", _STUB_ENDPOINT, _make_stub("osv-scanner")),
-    "checkov": Driver("checkov", _STUB_ENDPOINT, _make_stub("checkov")),
-    "codeql": Driver("codeql", _STUB_ENDPOINT, _make_stub("codeql")),
-    "sonarqube": Driver("sonarqube", _STUB_ENDPOINT, _make_stub("sonarqube")),
-    "snyk": Driver("snyk", _STUB_ENDPOINT, _make_stub("snyk")),
-    "owasp-zap": Driver("owasp-zap", _STUB_ENDPOINT, _make_stub("owasp-zap")),
+    "trivy": Driver("trivy", _BULK_UNIVERSAL, _trivy_runner),
+    "bandit": Driver("bandit", _BULK_UNIVERSAL, _bandit_runner),
+    "eslint-security": Driver("eslint-security", _BULK_UNIVERSAL, _eslint_runner),
+    "osv-scanner": Driver("osv-scanner", _BULK_UNIVERSAL, _osv_runner),
+    "checkov": Driver("checkov", _BULK_UNIVERSAL, _checkov_runner),
+    "codeql": Driver("codeql", _BULK_UNIVERSAL, _external_toolchain_stub("codeql")),
+    "sonarqube": Driver("sonarqube", _BULK_UNIVERSAL, _external_toolchain_stub("sonarqube")),
+    "snyk": Driver("snyk", _BULK_UNIVERSAL, _external_toolchain_stub("snyk")),
+    "owasp-zap": Driver("owasp-zap", _BULK_UNIVERSAL, _external_toolchain_stub("owasp-zap")),
 }
 
-# Used when the API call to fetch active scanners fails (network blip, 5xx).
-# Mirrors the backend ``ScannerCatalogService.DefaultScannerKeys`` so a degraded
-# control plane still produces a meaningful scan.
 DEFAULT_KEYS: list[str] = ["semgrep", "gitleaks"]

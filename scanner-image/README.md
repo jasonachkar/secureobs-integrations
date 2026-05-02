@@ -1,6 +1,6 @@
 # secureobs/scanner
 
-Docker image bundling Semgrep, GitLeaks, and SecureObs orchestration logic for CI pipelines.
+Docker image bundling Semgrep, GitLeaks, Trivy, Bandit, Checkov, OSV-Scanner, ESLint (security plugin), and SecureObs orchestration logic for CI pipelines.
 
 **Docker Hub:** `secureobs/scanner`
 
@@ -38,7 +38,18 @@ docker run --rm \
   --pipeline-run-id <unique-run-id>
 ```
 
-Drivers bundled in this image: **Semgrep**, **GitLeaks**. Catalog keys for Trivy, Bandit, ESLint Security, OSV-Scanner, Checkov, CodeQL, SonarQube, Snyk, and OWASP ZAP are recognised as stubs — enabling them in the dashboard is safe and logs a clear "driver not bundled yet" notice instead of aborting the scan. Pin to a newer image tag once those drivers ship.
+**Rollout:** your SecureObs backend must expose `POST /api/findings/bulk-universal` (API key authenticated) **before** you rely on scanners other than Semgrep/GitLeaks. Otherwise only the typed Semgrep/GitLeaks bulk endpoints succeed.
+
+Bundled scanners (as of **v1.2+**):
+
+| Catalog key | In image? | Bulk ingest endpoint |
+|---|---|---|
+| `semgrep` | Yes | `/api/findings/bulk-semgrep` |
+| `gitleaks` | Yes | `/api/findings/bulk-gitleaks` |
+| `trivy`, `bandit`, `checkov`, `osv-scanner`, `eslint-security` | Yes | `/api/findings/bulk-universal` |
+| `codeql`, `sonarqube`, `snyk`, `owasp-zap` | **Skipped** — need vendor toolchain / secrets / SARIF beyond a generic tarball scan | _(no ingest from this bundle)_ |
+
+`eslint-security` only analyses plain JavaScript family files (`*.js`, `*.jsx`, `*.mjs`, `*.cjs`) via the bundled recommended ruleset — TypeScript-heavy repos may prefer their own ESLint CI step separately.
 
 ### `gate`
 
