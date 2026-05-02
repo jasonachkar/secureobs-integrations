@@ -11,7 +11,17 @@ log = logging.getLogger(__name__)
 _RESULTS_FILE = "/tmp/secureobs-semgrep.json"
 
 
-def run(source_dir: str, project_id: str, pipeline_run_id: str) -> ScanResult:
+def run(
+    source_dir: str,
+    project_id: str,
+    pipeline_run_id: str,
+    config: "dict[str, str] | None" = None,
+) -> ScanResult:
+    # ``config`` is reserved for per-project tuning (custom rulesets, exclude
+    # globs, etc.). Semgrep currently runs the canonical p/ci ruleset for
+    # everyone — once we surface knobs in the dashboard we'll read them here.
+    del config
+
     log.info("Running Semgrep on %s", source_dir)
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"

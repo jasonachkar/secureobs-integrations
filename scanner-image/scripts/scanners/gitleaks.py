@@ -11,7 +11,16 @@ log = logging.getLogger(__name__)
 _RESULTS_FILE = "/tmp/secureobs-gitleaks.json"
 
 
-def run(source_dir: str, project_id: str, pipeline_run_id: str) -> ScanResult:
+def run(
+    source_dir: str,
+    project_id: str,
+    pipeline_run_id: str,
+    config: "dict[str, str] | None" = None,
+) -> ScanResult:
+    # ``config`` is reserved for per-project tuning (custom rules, allowlists).
+    # GitLeaks currently runs with the bundled default ruleset for everyone.
+    del config
+
     log.info("Running GitLeaks on %s", source_dir)
 
     proc = subprocess.run(

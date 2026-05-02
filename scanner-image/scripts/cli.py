@@ -6,7 +6,7 @@ import sys
 import config
 import api_client
 import build_gate as gate_module
-from scanners import semgrep, gitleaks
+from scanners.registry import DEFAULT_KEYS, REGISTRY
 from pr_comments import azuredevops, github
 
 log = logging.getLogger(__name__)
@@ -18,26 +18,90 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--pipeline-run-id", required=True, help="Unique pipeline run identifier")
 
 
+def _resolve_active_scanners(
+    api_url: str, api_key: str, project_id: str
+) -> list[dict]:
+    """Decide which scanners to run on this invocation.
+
+    Source of truth is the SecureObs API — whatever the user toggled in the
+    dashboard takes effect on the next pipeline run with zero YAML edits. If
+    that lookup is degraded (transient 5xx, network blip), we fall back to a
+    safe default set so the user still gets *some* scan rather than a broken
+    pipeline. Auth/permission failures are NOT silently masked here — those
+    bubble out of ``api_client.get_active_scanners`` as ``sys.exit(1)``.
+    """
+    active = api_client.get_active_scanners(api_url, api_key, project_id)
+    if active is None:
+        log.warning(
+            "Falling back to default scanners: %s. Toggle scanners in the "
+            "SecureObs dashboard to override on the next run.",
+            ", ".join(DEFAULT_KEYS),
+        )
+        return [{"key": k, "config": None} for k in DEFAULT_KEYS]
+    return active
+
+
 def cmd_scan(args: argparse.Namespace) -> None:
     api_url = config.get_api_url()
     api_key = config.require_env("SECUREOBS_API_KEY")
 
-    semgrep_result = semgrep.run("/workspace", args.project_id, args.pipeline_run_id)
-    if semgrep_result.findings:
-        data = api_client.post_findings(api_url, api_key, "findings/bulk-semgrep", semgrep_result.findings)
-        ingested = data.get("ingested", len(semgrep_result.findings))
-        deduped = data.get("deduplicated", 0)
-        log.info("Semgrep: %d finding(s) ingested (%d new after dedup).", ingested, deduped)
-    else:
-        log.info("Semgrep: no findings.")
+    active = _resolve_active_scanners(api_url, api_key, args.project_id)
 
-    gitleaks_result = gitleaks.run("/workspace", args.project_id, args.pipeline_run_id)
-    if gitleaks_result.findings:
-        data = api_client.post_findings(api_url, api_key, "findings/bulk-gitleaks", gitleaks_result.findings)
-        ingested = data.get("ingested", len(gitleaks_result.findings))
-        log.info("GitLeaks: %d secret(s) ingested.", ingested)
-    else:
-        log.info("GitLeaks: no secrets found.")
+    if not active:
+        log.warning(
+            "No scanners are enabled for this project. Enable at least one "
+            "in the SecureObs dashboard, then re-run the pipeline."
+        )
+        return
+
+    enabled_keys = [str(entry.get("key", "?")) for entry in active]
+    log.info("Active scanners for this run: %s", ", ".join(enabled_keys))
+
+    for entry in active:
+        key = entry.get("key")
+        cfg = entry.get("config") or None
+
+        if not key or not isinstance(key, str):
+            log.warning("Skipping malformed active-scanner entry: %r", entry)
+            continue
+
+        driver = REGISTRY.get(key)
+        if driver is None:
+            log.warning(
+                "Unknown scanner key '%s' returned by the API; skipping. "
+                "(This usually means the SecureObs catalog is ahead of this "
+                "image — pin to a newer tag once the driver ships.)",
+                key,
+            )
+            continue
+
+        try:
+            result = driver.runner(
+                "/workspace", args.project_id, args.pipeline_run_id, cfg
+            )
+        except Exception:
+            # Defensive: a driver crash must never take down the whole scan.
+            # Auth/network failures inside the bulk-add path still abort via
+            # ``post_findings`` (sys.exit), which is the desired blast radius.
+            log.exception(
+                "Scanner '%s' raised an unexpected error; continuing with the "
+                "remaining scanners.",
+                key,
+            )
+            continue
+
+        if result.skipped:
+            log.info("%s skipped: %s", key, result.skip_reason or "(no reason given)")
+            continue
+
+        if not result.findings:
+            log.info("%s: no findings.", key)
+            continue
+
+        data = api_client.post_findings(api_url, api_key, driver.bulk_endpoint, result.findings)
+        ingested = data.get("ingested", len(result.findings))
+        deduped = data.get("deduplicated", 0)
+        log.info("%s: %d finding(s) ingested (%d new after dedup).", key, ingested, deduped)
 
     log.info("Scan complete.")
 
@@ -70,7 +134,10 @@ def main() -> None:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    scan_p = sub.add_parser("scan", help="Run Semgrep and GitLeaks, post findings to SecureObs.")
+    scan_p = sub.add_parser(
+        "scan",
+        help="Run the scanners enabled for this project in the SecureObs dashboard, then post findings.",
+    )
     _add_common_args(scan_p)
 
     gate_p = sub.add_parser("gate", help="Check for blocking findings. Exits 3 if blocked.")

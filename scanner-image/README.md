@@ -25,7 +25,7 @@ docker run --rm \
 
 ### `scan`
 
-Runs Semgrep (SAST) and GitLeaks (secrets detection) against `/workspace`, then posts findings to SecureObs.
+Runs the scanners that are currently enabled for `--project-id` against `/workspace`, then posts findings to SecureObs. The image fetches the enabled list from `GET /api/projects/{projectId}/scanners/active` at the start of every run, so toggling a scanner in the SecureObs dashboard takes effect on the next CI run with **zero pipeline-YAML edits**. If the API is unreachable, the orchestrator falls back to a built-in safe default (`semgrep` + `gitleaks`) so a degraded control plane never breaks the pipeline.
 
 ```bash
 docker run --rm \
@@ -37,6 +37,8 @@ docker run --rm \
   --tenant-id <tenant-id> \
   --pipeline-run-id <unique-run-id>
 ```
+
+Drivers bundled in this image: **Semgrep**, **GitLeaks**. Catalog keys for Trivy, Bandit, ESLint Security, OSV-Scanner, Checkov, CodeQL, SonarQube, Snyk, and OWASP ZAP are recognised as stubs — enabling them in the dashboard is safe and logs a clear "driver not bundled yet" notice instead of aborting the scan. Pin to a newer image tag once those drivers ship.
 
 ### `gate`
 
