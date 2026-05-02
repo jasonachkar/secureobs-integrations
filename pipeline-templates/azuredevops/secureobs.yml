@@ -32,23 +32,6 @@ stages:
           --pipeline-run-id "$(Build.BuildId)"
       displayName: 'Scan workspace'
 
-  - job: Gate
-    displayName: 'Build gate'
-    dependsOn: Scan
-    condition: and(succeeded(), eq('${{ parameters.failOnBlocking }}', 'true'))
-    pool:
-      vmImage: 'ubuntu-latest'
-    steps:
-    - script: |
-        docker run --rm \
-          -e SECUREOBS_API_KEY="$(SECUREOBS_API_KEY)" \
-          secureobs/scanner:${{ parameters.imageTag }} \
-          gate \
-          --project-id "${{ parameters.projectId }}" \
-          --tenant-id "${{ parameters.tenantId }}" \
-          --pipeline-run-id "$(Build.BuildId)"
-      displayName: 'Check for blocking findings'
-
   - job: PrComment
     displayName: 'Post PR comment'
     dependsOn: Scan
@@ -74,3 +57,25 @@ stages:
       displayName: 'Post PR comment'
       env:
         SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - job: Gate
+    displayName: 'Build gate'
+    dependsOn: [Scan, PrComment]
+    condition: |
+      and(
+        eq(dependencies.Scan.result, 'Succeeded'),
+        in(dependencies.PrComment.result, 'Succeeded', 'Skipped', 'SucceededWithIssues', 'Failed'),
+        eq('${{ parameters.failOnBlocking }}', 'true')
+      )
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - script: |
+        docker run --rm \
+          -e SECUREOBS_API_KEY="$(SECUREOBS_API_KEY)" \
+          secureobs/scanner:${{ parameters.imageTag }} \
+          gate \
+          --project-id "${{ parameters.projectId }}" \
+          --tenant-id "${{ parameters.tenantId }}" \
+          --pipeline-run-id "$(Build.BuildId)"
+      displayName: 'Check for blocking findings'
