@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── Progress helpers ──────────────────────────────────────────────────────────
-TOTAL_STEPS=5
+TOTAL_STEPS=6
 CURRENT_STEP=0
 START_TIME=$(date +%s)
 
@@ -68,12 +68,21 @@ docker buildx build \
     --push \
     "$SCRIPT_DIR"
 
-# ── Step 5: Done ─────────────────────────────────────────────────────────────
+# ── Step 5: Git tag ──────────────────────────────────────────────────────────
+step "Creating and pushing git tag"
+GIT_TAG="integrations-v${VERSION}"
+if git rev-parse "$GIT_TAG" >/dev/null 2>&1; then
+    ok "Tag $GIT_TAG already exists — skipping"
+else
+    git tag "$GIT_TAG"
+    git push origin "$GIT_TAG"
+    ok "Tagged and pushed $GIT_TAG"
+fi
+
+# ── Step 6: Done ─────────────────────────────────────────────────────────────
 step "Publishing complete"
-ok "v${MAJOR}.${MINOR}.${PATCH}"
-ok "v${MAJOR}.${MINOR}"
-ok "v${MAJOR}"
-ok "latest"
+ok "Docker: v${MAJOR}.${MINOR}.${PATCH} / v${MAJOR}.${MINOR} / v${MAJOR} / latest"
+ok "Git tag: $GIT_TAG"
 
 ELAPSED=$(( $(date +%s) - START_TIME ))
 printf "\n\033[1;32m  Done in %ds. Image live at docker.io/%s\033[0m\n\n" "$ELAPSED" "$IMAGE"
