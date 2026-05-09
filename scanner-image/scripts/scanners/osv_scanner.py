@@ -5,11 +5,14 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import subprocess
 
 from .base import ScanResult
 
 log = logging.getLogger(__name__)
+
+_OUTPUT_FILE = "/tmp/osv-results.json"
 
 
 def _fp(*parts: str) -> str:
@@ -43,44 +46,54 @@ def _severity_from_vuln(vuln: dict) -> str:
     return "MEDIUM"
 
 
-def _try_commands(source_dir: str) -> tuple[str | None, str]:
+def _try_invoke(source_dir: str) -> tuple[bool, str]:
     """
-    Try every known OSV-Scanner command format.
-    Returns (stdout_json_or_none, last_stderr).
+    Run OSV-Scanner, writing JSON output to _OUTPUT_FILE.
+    Returns (success, stderr).
 
-    Priority rule: if stdout contains valid JSON we use it immediately,
-    regardless of exit code — partial results (some lockfiles failed to
-    parse) are still valuable findings.
+    Exit codes per OSV-Scanner contract:
+      0 = scan completed, no vulnerabilities
+      1 = scan completed, vulnerabilities found
+    Any other exit code is a real failure — do not mask it.
+
+    Lockfile parse warnings (e.g. 'Attempted to scan lockfile but failed')
+    come on stderr. They are logged at WARNING but do not abort the scan;
+    findings from other lockfiles in the same run are still valid.
     """
     candidates = [
-        # v2.x syntax
-        ["osv-scanner", "scan", "--format", "json", source_dir],
-        ["osv-scanner", "scan", "--format", "json", "--recursive", source_dir],
+        # v2.x syntax (try first — newer installs)
+        ["osv-scanner", "scan", "--format", "json",
+         "--output", _OUTPUT_FILE, source_dir],
         # v1.x syntax
-        ["osv-scanner", "--format", "json", "--recursive", source_dir],
-        ["osv-scanner", "--format", "json", "-r", source_dir],
+        ["osv-scanner", "--format", "json",
+         "--output", _OUTPUT_FILE, "--recursive", source_dir],
     ]
 
-    last_stderr = ""
-    had_normal_exit = False
-
     for cmd in candidates:
+        # Clean up any leftover output file from a previous attempt.
+        try:
+            os.remove(_OUTPUT_FILE)
+        except FileNotFoundError:
+            pass
+
         proc = subprocess.run(cmd, capture_output=True, text=True)
-        last_stderr = proc.stderr or ""
-        out = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
 
-        log.debug("osv-scanner %s -> rc=%d stdout_len=%d", cmd[1], proc.returncode, len(out))
+        log.debug("osv-scanner %s -> rc=%d", " ".join(cmd[1:3]), proc.returncode)
 
-        # If stdout looks like JSON, use it — even a partial scan is useful.
-        if out.startswith("{"):
-            return out, last_stderr
+        # Surface lockfile parse warnings without aborting.
+        if stderr:
+            for line in stderr.splitlines():
+                if "failed" in line.lower() or "error" in line.lower() or "warn" in line.lower():
+                    log.warning("osv-scanner: %s", line)
 
-        # Normal exit with no output means no supported lockfiles found.
-        if proc.returncode in (0, 1, 2):
-            had_normal_exit = True
+        if proc.returncode in (0, 1):
+            return True, stderr
 
-    # No command produced JSON. Return empty string so caller can decide.
-    return (None if not had_normal_exit else "{}"), last_stderr
+        # Non 0/1 exit — this command variant didn't work, try the next.
+        log.debug("osv-scanner exited %d; trying next command variant", proc.returncode)
+
+    return False, stderr  # type: ignore[possibly-undefined]
 
 
 def run(
@@ -92,27 +105,31 @@ def run(
     del config
     log.info("Running OSV-Scanner on %s", source_dir)
 
-    stdout_json, last_stderr = _try_commands(source_dir)
+    success, stderr = _try_invoke(source_dir)
 
-    if stdout_json is None:
-        # Every command exited abnormally and produced no JSON.
-        # Log but don't crash — degrade gracefully.
-        log.warning(
-            "OSV-Scanner produced no usable output on any command format — "
-            "returning zero findings. Last stderr: %s",
-            last_stderr[:1200],
+    if not success:
+        return ScanResult(
+            skipped=True,
+            skip_reason="osv_invocation_failed",
+            exit_code=-1,
+            stderr_tail=stderr[-500:],
         )
-        return ScanResult(findings=[])
 
-    if not stdout_json or stdout_json == "{}":
-        log.info("OSV-Scanner found no lockfiles to scan.")
+    if not os.path.isfile(_OUTPUT_FILE):
+        log.info("OSV-Scanner produced no output file — no supported lockfiles found.")
         return ScanResult(findings=[])
 
     try:
-        data = json.loads(stdout_json)
-    except json.JSONDecodeError:
-        log.warning("OSV-Scanner stdout was not valid JSON — returning zero findings: %s", stdout_json[:500])
-        return ScanResult(findings=[])
+        with open(_OUTPUT_FILE) as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("OSV-Scanner output file could not be parsed: %s", exc)
+        return ScanResult(
+            skipped=True,
+            skip_reason="osv_bad_output_file",
+            exit_code=-1,
+            stderr_tail=stderr[-500:],
+        )
 
     findings: list[dict] = []
     for block in data.get("results") or []:

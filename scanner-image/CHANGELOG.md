@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.4 — 2026-05-09
+
+**Fix (ESLint):** Upgrade to `eslint-plugin-security@^3.0.1`. v3 ships a proper flat-config `recommended` export that does not create a circular `plugins` reference under ESLint 8. Also removed the redundant `"plugins": ["security"]` key from `eslint-secureobs.json` — extending `plugin:security/recommended` already registers the plugin.
+
+**Fix (OSV-Scanner):** Switch from capturing stdout to writing JSON to `/tmp/osv-results.json` via `--output`. OSV-Scanner interleaves progress messages and lockfile warnings on stdout, corrupting the JSON stream. Reading from the output file is reliable. Exit codes 0 (clean) and 1 (vulns found) are treated as success; any other code is a real failure. Per-file parse warnings (e.g. complex `pom.xml`) are now logged at WARNING and do not abort the run — findings from other lockfiles in the same repo are captured.
+
+**Fix (logging):** Skips caused by a non-zero tool exit are now logged at ERROR in the orchestrator, including the exit code and the last 500 characters of stderr. Non-exit skips (no JS files, no lockfiles) remain at INFO. `ScanResult` gains two optional diagnostic fields (`exit_code`, `stderr_tail`) to carry this information — the fundamental result model is unchanged.
+
+**Fix (pipeline YAML):** Azure DevOps job and step display names updated to accurately reflect the full scanner suite.
+
 ## v1.2.3 — 2026-05-09
 
 **Bug fix (OSV-Scanner):** Rewrote scanner driver to prioritise JSON output over exit code. OSV-Scanner exits non-zero when individual lockfiles fail to parse (e.g. complex Maven `pom.xml` with unresolvable parent POMs) but may still emit valid JSON for files it *could* scan — those partial results are now captured instead of discarded. When no JSON is produced at all the driver returns zero findings instead of crashing the pipeline. Also reordered candidates to try v2.x syntax first.

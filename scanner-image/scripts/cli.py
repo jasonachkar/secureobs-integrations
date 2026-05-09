@@ -91,7 +91,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
             continue
 
         if result.skipped:
-            log.info("%s skipped: %s", key, result.skip_reason or "(no reason given)")
+            if result.exit_code is not None:
+                log.error(
+                    "%s skipped due to non-zero exit (code %d): %s. stderr: %s",
+                    key,
+                    result.exit_code,
+                    result.skip_reason or "(no reason given)",
+                    result.stderr_tail or "(none)",
+                )
+            else:
+                log.info("%s skipped: %s", key, result.skip_reason or "(no reason given)")
             continue
 
         if not result.findings:

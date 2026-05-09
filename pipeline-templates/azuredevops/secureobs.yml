@@ -16,7 +16,7 @@ stages:
   jobs:
 
   - job: Scan
-    displayName: 'Run Semgrep + GitLeaks'
+    displayName: 'Run Security Modules: SAST + Secrets + SCA + IaC + Container'
     pool:
       vmImage: 'ubuntu-latest'
     steps:
@@ -30,7 +30,7 @@ stages:
           --project-id "${{ parameters.projectId }}" \
           --tenant-id "${{ parameters.tenantId }}" \
           --pipeline-run-id "$(Build.BuildId)"
-      displayName: 'Scan workspace'
+      displayName: 'Scan workspace (Semgrep, ESLint, Bandit, Gitleaks, OSV-Scanner, Checkov, Trivy)'
 
   - job: PrComment
     displayName: 'Post PR comment'

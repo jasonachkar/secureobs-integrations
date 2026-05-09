@@ -63,12 +63,12 @@ def run(
     )
 
     if proc.returncode not in (0, 1):
-        log.warning(
-            "ESLint exited %d — treating as skip. stderr: %s",
-            proc.returncode,
-            (proc.stderr or "")[:500],
+        return ScanResult(
+            skipped=True,
+            skip_reason=f"eslint_exit_{proc.returncode}",
+            exit_code=proc.returncode,
+            stderr_tail=(proc.stderr or "")[-500:],
         )
-        return ScanResult(skipped=True, skip_reason=f"eslint_exit_{proc.returncode}")
 
     raw = proc.stdout.strip()
     if not raw or raw == "[]":
