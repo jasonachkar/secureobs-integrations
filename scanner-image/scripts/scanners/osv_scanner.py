@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import subprocess
-import sys
 
 from .base import ScanResult
 
@@ -76,7 +75,9 @@ def run(
             proc.returncode,
             len(out),
         )
-        if proc.returncode not in (0, 1):
+        # 0 = clean, 1 = vulnerabilities found, 2 = partial scan (some
+        # lockfiles unresolvable) — all are valid result states, not errors.
+        if proc.returncode not in (0, 1, 2):
             continue
         if not out:
             stdout_text = "{}"
@@ -85,14 +86,17 @@ def run(
             stdout_text = out
             break
     else:
-        log.error("OSV-Scanner could not emit JSON stdout. Last stderr: %s", last_stderr[:1200])
-        sys.exit(2)
+        log.warning(
+            "OSV-Scanner could not emit JSON stdout — skipping. Last stderr: %s",
+            last_stderr[:1200],
+        )
+        return ScanResult(skipped=True, skip_reason="osv_no_json_output")
 
     try:
         data = json.loads(stdout_text)
     except json.JSONDecodeError:
-        log.error("OSV-Scanner stdout was not JSON: %s", stdout_text[:500])
-        sys.exit(2)
+        log.warning("OSV-Scanner stdout was not JSON — skipping: %s", stdout_text[:500])
+        return ScanResult(skipped=True, skip_reason="osv_bad_json")
 
     findings: list[dict] = []
     for block in data.get("results") or []:

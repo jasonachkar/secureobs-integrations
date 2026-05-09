@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && wget -q -O /usr/local/bin/osv-scanner \
         "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" \
     && chmod +x /usr/local/bin/osv-scanner \
-    && npm install -g eslint@8.57.0 eslint-plugin-security@2.1.1 \
+    && npm install -g eslint@8.57.0 eslint-plugin-security@1.7.1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

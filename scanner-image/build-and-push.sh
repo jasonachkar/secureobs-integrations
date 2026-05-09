@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── Progress helpers ──────────────────────────────────────────────────────────
-TOTAL_STEPS=4
+TOTAL_STEPS=5
 CURRENT_STEP=0
 START_TIME=$(date +%s)
 
@@ -35,12 +35,17 @@ printf "\033[90m  Image : %s\033[0m\n" "$IMAGE"
 printf "\033[90m  Version: v%s\033[0m\n" "$VERSION"
 printf "\033[90m  Platform: linux/amd64\033[0m\n\n"
 
-# ── Step 1: Docker daemon check ───────────────────────────────────────────────
+# ── Step 1: Sync version constants ───────────────────────────────────────────
+step "Syncing version constants across the codebase"
+bash "$SCRIPT_DIR/sync-versions.sh"
+ok "Version constants synced"
+
+# ── Step 2: Docker daemon check ───────────────────────────────────────────────
 step "Checking Docker daemon"
 docker info > /dev/null 2>&1
 ok "Docker daemon is running"
 
-# ── Step 2: Buildx builder setup ─────────────────────────────────────────────
+# ── Step 3: Buildx builder setup ─────────────────────────────────────────────
 step "Setting up buildx builder"
 if ! docker buildx inspect secureobs-builder >/dev/null 2>&1; then
     echo "  Creating new buildx builder 'secureobs-builder'..."
@@ -52,7 +57,7 @@ else
     ok "Using existing builder 'secureobs-builder'"
 fi
 
-# ── Step 3: Build ────────────────────────────────────────────────────────────
+# ── Step 4: Build ────────────────────────────────────────────────────────────
 step "Building image (this may take a few minutes)"
 docker buildx build \
     --platform linux/amd64 \
@@ -63,7 +68,7 @@ docker buildx build \
     --push \
     "$SCRIPT_DIR"
 
-# ── Step 4: Done ─────────────────────────────────────────────────────────────
+# ── Step 5: Done ─────────────────────────────────────────────────────────────
 step "Publishing complete"
 ok "v${MAJOR}.${MINOR}.${PATCH}"
 ok "v${MAJOR}.${MINOR}"

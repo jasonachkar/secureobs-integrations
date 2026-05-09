@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.2.2 — 2026-05-09
+
+**Bug fix:** OSV-Scanner driver no longer crashes the pipeline on exit code `2` (partial scan — some lockfiles unresolvable) or when no JSON is produced. Both failure paths now return a graceful skip instead of calling `sys.exit(2)`. Removed unused `sys` import.
+
+## v1.2.1 — 2026-05-09
+
+**Bug fix:** Pin `eslint-plugin-security` to `1.7.1` (was `2.1.1`). v2.x of the plugin uses ESLint 9 flat-config format, which causes a circular-reference `JSON.stringify` crash (exit 2) when loaded by ESLint 8. The scanner was silently skipping ESLint on all runs as a result.
+
 ## v1.2.0 — 2026-05-02
 
 Bundled multi-scanner runtime + universal ingest API.
